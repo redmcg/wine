@@ -195,6 +195,7 @@ struct fd
     struct async_queue   wait_q;      /* other async waiters of this fd */
     struct completion   *completion;  /* completion object attached to this fd */
     apc_param_t          comp_key;    /* completion key to set in completion events */
+    unsigned int         comp_flags;  /* completion flags */
     int                  esync_fd;    /* esync file descriptor */
 };
 
@@ -1613,6 +1614,7 @@ static struct fd *alloc_fd_object(void)
     fd->fs_locks   = 1;
     fd->poll_index = -1;
     fd->completion = NULL;
+    fd->comp_flags = 0;
     fd->esync_fd   = -1;
     init_async_queue( &fd->read_q );
     init_async_queue( &fd->write_q );
@@ -1649,6 +1651,7 @@ struct fd *alloc_pseudo_fd( const struct fd_ops *fd_user_ops, struct object *use
     fd->fs_locks   = 0;
     fd->poll_index = -1;
     fd->completion = NULL;
+    fd->comp_flags = 0;
     fd->no_fd_status = STATUS_BAD_DEVICE_TYPE;
     fd->esync_fd   = -1;
     init_async_queue( &fd->read_q );
@@ -2196,9 +2199,31 @@ int no_fd_flush( struct fd *fd, struct async *async )
 }
 
 /* default get_file_info() routine */
-void no_fd_get_file_info( struct fd *fd, unsigned int info_class )
+void no_fd_get_file_info( struct fd *fd, obj_handle_t handle, unsigned int info_class )
 {
     set_error( STATUS_OBJECT_TYPE_MISMATCH );
+}
+
+/* default get_file_info() routine */
+void default_fd_get_file_info( struct fd *fd, obj_handle_t handle, unsigned int info_class )
+{
+    switch (info_class)
+    {
+    case FileIoCompletionNotificationInformation:
+        {
+            FILE_IO_COMPLETION_NOTIFICATION_INFORMATION info;
+            if (get_reply_max_size() < sizeof(info))
+            {
+                set_error( STATUS_INFO_LENGTH_MISMATCH );
+                return;
+            }
+            info.Flags = fd->comp_flags;
+            set_reply_data( &info, sizeof(info) );
+            break;
+        }
+    default:
+        set_error( STATUS_NOT_IMPLEMENTED );
+    }
 }
 
 /* default get_volume_info() routine */
@@ -2392,6 +2417,7 @@ void fd_copy_completion( struct fd *src, struct fd *dst )
 {
     assert( !dst->completion );
     dst->completion = fd_get_completion( src, &dst->comp_key );
+    dst->comp_flags = src->comp_flags;
 }
 
 /* flush a file buffers */
@@ -2402,7 +2428,7 @@ DECL_HANDLER(flush)
 
     if (!fd) return;
 
-    if ((async = create_request_async( fd, &req->async )))
+    if ((async = create_request_async( fd, fd->comp_flags, &req->async )))
     {
         reply->event = async_handoff( async, fd->fd_ops->flush( fd, async ), NULL );
         release_object( async );
@@ -2417,7 +2443,7 @@ DECL_HANDLER(get_file_info)
 
     if (fd)
     {
-        fd->fd_ops->get_file_info( fd, req->info_class );
+        fd->fd_ops->get_file_info( fd, req->handle, req->info_class );
         release_object( fd );
     }
 }
@@ -2501,7 +2527,7 @@ DECL_HANDLER(read)
 
     if (!fd) return;
 
-    if ((async = create_request_async( fd, &req->async )))
+    if ((async = create_request_async( fd, fd->comp_flags, &req->async )))
     {
         reply->wait    = async_handoff( async, fd->fd_ops->read( fd, async, req->pos ), NULL );
         reply->options = fd->options;
@@ -2518,7 +2544,7 @@ DECL_HANDLER(write)
 
     if (!fd) return;
 
-    if ((async = create_request_async( fd, &req->async )))
+    if ((async = create_request_async( fd, fd->comp_flags, &req->async )))
     {
         reply->wait    = async_handoff( async, fd->fd_ops->write( fd, async, req->pos ), &reply->size );
         reply->options = fd->options;
@@ -2536,7 +2562,7 @@ DECL_HANDLER(ioctl)
 
     if (!fd) return;
 
-    if ((async = create_request_async( fd, &req->async )))
+    if ((async = create_request_async( fd, fd->comp_flags, &req->async )))
     {
         reply->wait    = async_handoff( async, fd->fd_ops->ioctl( fd, req->code, async ), NULL );
         reply->options = fd->options;
@@ -2599,8 +2625,27 @@ DECL_HANDLER(add_fd_completion)
     struct fd *fd = get_handle_fd_obj( current->process, req->handle, 0 );
     if (fd)
     {
-        if (fd->completion)
+        if (fd->completion && (req->async || !(fd->comp_flags & FILE_SKIP_COMPLETION_PORT_ON_SUCCESS)))
             add_completion( fd->completion, fd->comp_key, req->cvalue, req->status, req->information );
+        release_object( fd );
+    }
+}
+
+/* set fd completion information */
+DECL_HANDLER(set_fd_completion_mode)
+{
+    struct fd *fd = get_handle_fd_obj( current->process, req->handle, 0 );
+    if (fd)
+    {
+        if (!(fd->options & (FILE_SYNCHRONOUS_IO_ALERT | FILE_SYNCHRONOUS_IO_NONALERT)))
+        {
+            /* removing COMPLETION_SKIP_ON_SUCCESS is not allowed */
+            fd->comp_flags |= req->flags & ( FILE_SKIP_COMPLETION_PORT_ON_SUCCESS
+                                           | FILE_SKIP_SET_EVENT_ON_HANDLE
+                                           | FILE_SKIP_SET_USER_EVENT_ON_FAST_IO );
+        }
+        else
+            set_error( STATUS_INVALID_PARAMETER );
         release_object( fd );
     }
 }

@@ -965,7 +965,7 @@
 @ stub __report_gsfailure
 @ extern __setlc_active msvcr120.__setlc_active
 @ cdecl __setusermatherr(ptr) msvcr120.__setusermatherr
-@ stub __strncnt
+@ cdecl __strncnt(str long) msvcr120.__strncnt
 @ varargs __swprintf_l(ptr wstr ptr) msvcr120.__swprintf_l
 @ cdecl __sys_errlist() msvcr120.__sys_errlist
 @ cdecl __sys_nerr() msvcr120.__sys_nerr
@@ -1006,7 +1006,7 @@
 @ cdecl _atoflt(ptr str) msvcr120._atoflt
 @ cdecl _atoflt_l(ptr str ptr) msvcr120._atoflt_l
 @ cdecl -ret64 _atoi64(str) msvcr120._atoi64
-@ cdecl _atoi64_l(str ptr) msvcr120._atoi64_l
+@ cdecl -ret64 _atoi64_l(str ptr) msvcr120._atoi64_l
 @ cdecl _atoi_l(str ptr) msvcr120._atoi_l
 @ cdecl _atol_l(str ptr) msvcr120._atol_l
 @ cdecl _atoldbl(ptr str) msvcr120._atoldbl

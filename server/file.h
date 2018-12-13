@@ -63,7 +63,7 @@ struct fd_ops
     /* flush the object buffers */
     int (*flush)(struct fd *, struct async *);
     /* query file info */
-    void (*get_file_info)( struct fd *, unsigned int );
+    void (*get_file_info)( struct fd *, obj_handle_t, unsigned int );
     /* query volume info */
     void (*get_volume_info)( struct fd *, unsigned int );
     /* perform an ioctl on the file */
@@ -112,7 +112,8 @@ extern void fd_reselect_async( struct fd *fd, struct async_queue *queue );
 extern int no_fd_read( struct fd *fd, struct async *async, file_pos_t pos );
 extern int no_fd_write( struct fd *fd, struct async *async, file_pos_t pos );
 extern int no_fd_flush( struct fd *fd, struct async *async );
-extern void no_fd_get_file_info( struct fd *fd, unsigned int info_class );
+extern void no_fd_get_file_info( struct fd *fd, obj_handle_t handle, unsigned int info_class );
+extern void default_fd_get_file_info( struct fd *fd, obj_handle_t handle, unsigned int info_class );
 extern void no_fd_get_volume_info( struct fd *fd, unsigned int info_class );
 extern int no_fd_ioctl( struct fd *fd, ioctl_code_t code, struct async *async );
 extern int default_fd_ioctl( struct fd *fd, ioctl_code_t code, struct async *async );
@@ -185,7 +186,7 @@ extern struct object *create_serial( struct fd *fd );
 /* async I/O functions */
 extern void free_async_queue( struct async_queue *queue );
 extern struct async *create_async( struct fd *fd, struct thread *thread, const async_data_t *data, struct iosb *iosb );
-extern struct async *create_request_async( struct fd *fd, const async_data_t *data );
+extern struct async *create_request_async( struct fd *fd, unsigned int comp_flags, const async_data_t *data );
 extern obj_handle_t async_handoff( struct async *async, int success, data_size_t *result );
 extern void queue_async( struct async_queue *queue, struct async *async );
 extern void async_set_timeout( struct async *async, timeout_t timeout, unsigned int status );

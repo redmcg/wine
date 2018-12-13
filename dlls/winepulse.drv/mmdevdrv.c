@@ -483,6 +483,7 @@ static HRESULT pulse_connect(void)
     WideCharToMultiByte(CP_UNIXCP, 0, name, -1, str, len, NULL, NULL);
     TRACE("Name: %s\n", str);
     pulse_ctx = pa_context_new(pa_mainloop_get_api(pulse_ml), str);
+    setenv("PULSE_PROP_application.name", str, 1);
     pa_xfree(str);
     if (!pulse_ctx) {
         ERR("Failed to create context\n");
@@ -693,6 +694,9 @@ static void pulse_underflow_callback(pa_stream *s, void *userdata)
     ACImpl *This = userdata;
     WARN("%p: Underflow\n", userdata);
     This->just_underran = TRUE;
+    /* re-sync */
+    This->pa_offs_bytes = This->lcl_offs_bytes;
+    This->pa_held_bytes = This->held_bytes;
 }
 
 static void pulse_started_callback(pa_stream *s, void *userdata)
@@ -794,6 +798,8 @@ static DWORD WINAPI pulse_timer_cb(void *user)
     DWORD delay;
     UINT32 adv_bytes;
     ACImpl *This = user;
+    int success;
+    pa_operation *o;
 
     pthread_mutex_lock(&pulse_lock);
     delay = This->mmdev_period_usec / 1000;
@@ -810,10 +816,22 @@ static DWORD WINAPI pulse_timer_cb(void *user)
 
         delay = This->mmdev_period_usec / 1000;
 
+        o = pa_stream_update_timing_info(This->stream, pulse_op_cb, &success);
+        if (o)
+        {
+            while (pa_operation_get_state(o) == PA_OPERATION_RUNNING)
+                pthread_cond_wait(&pulse_cond, &pulse_lock);
+            pa_operation_unref(o);
+        }
         err = pa_stream_get_time(This->stream, &now);
         if(err == 0){
             TRACE("got now: %llu, last time: %llu\n", now, This->last_time);
             if(This->started && (This->dataflow == eCapture || This->held_bytes)){
+                if(This->just_underran){
+                    This->last_time = now;
+                    This->just_started = TRUE;
+                }
+
                 if(This->just_started){
                     /* let it play out a period to absorb some latency and get accurate timing */
                     pa_usec_t diff = now - This->last_time;
@@ -843,6 +861,7 @@ static DWORD WINAPI pulse_timer_cb(void *user)
                     /* regardless of what PA does, advance one period */
                     adv_bytes = min(This->period_bytes, This->held_bytes);
                     This->lcl_offs_bytes += adv_bytes;
+                    This->lcl_offs_bytes %= This->real_bufsize_bytes;
                     This->held_bytes -= adv_bytes;
                 }else if(This->dataflow == eCapture){
                     pulse_read(This);
@@ -898,10 +917,10 @@ static HRESULT pulse_stream_connect(ACImpl *This, UINT32 period_bytes) {
     dump_attr(&attr);
     if (This->dataflow == eRender)
         ret = pa_stream_connect_playback(This->stream, NULL, &attr,
-        PA_STREAM_START_CORKED|PA_STREAM_START_UNMUTED|PA_STREAM_AUTO_TIMING_UPDATE|PA_STREAM_INTERPOLATE_TIMING|PA_STREAM_ADJUST_LATENCY, NULL, NULL);
+        PA_STREAM_START_CORKED|PA_STREAM_START_UNMUTED|PA_STREAM_ADJUST_LATENCY, NULL, NULL);
     else
         ret = pa_stream_connect_record(This->stream, NULL, &attr,
-        PA_STREAM_START_CORKED|PA_STREAM_START_UNMUTED|PA_STREAM_AUTO_TIMING_UPDATE|PA_STREAM_INTERPOLATE_TIMING|PA_STREAM_ADJUST_LATENCY);
+        PA_STREAM_START_CORKED|PA_STREAM_START_UNMUTED|PA_STREAM_ADJUST_LATENCY);
     if (ret < 0) {
         WARN("Returns %i\n", ret);
         return AUDCLNT_E_ENDPOINT_CREATE_FAILED;
@@ -2140,6 +2159,11 @@ static HRESULT WINAPI AudioRenderClient_ReleaseBuffer(
 
     This->held_bytes += written_bytes;
     This->pa_held_bytes += written_bytes;
+    if(This->pa_held_bytes > This->real_bufsize_bytes){
+        This->pa_offs_bytes += This->pa_held_bytes - This->real_bufsize_bytes;
+        This->pa_offs_bytes %= This->real_bufsize_bytes;
+        This->pa_held_bytes = This->real_bufsize_bytes;
+    }
     This->clock_written += written_bytes;
     This->locked = 0;
 
@@ -2375,13 +2399,6 @@ static HRESULT WINAPI AudioClock_GetPosition(IAudioClock *iface, UINT64 *pos,
     }
 
     *pos = This->clock_written - This->held_bytes;
-
-    if(This->started){
-        if(*pos < This->period_bytes)
-            *pos = 0;
-        else if(This->held_bytes > This->period_bytes)
-            *pos -= This->period_bytes;
-    }
 
     if (This->share == AUDCLNT_SHAREMODE_EXCLUSIVE)
         *pos /= pa_frame_size(&This->ss);

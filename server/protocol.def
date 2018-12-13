@@ -2462,18 +2462,6 @@ enum message_type
 #define NAMED_PIPE_NONBLOCKING_MODE     0x0004
 #define NAMED_PIPE_SERVER_END           0x8000
 
-/* Get named pipe information by handle */
-@REQ(get_named_pipe_info)
-    obj_handle_t   handle;
-@REPLY
-    unsigned int   flags;
-    unsigned int   sharing;
-    unsigned int   maxinstances;
-    unsigned int   instances;
-    unsigned int   outsize;
-    unsigned int   insize;
-@END
-
 /* Set named pipe information by handle */
 @REQ(set_named_pipe_info)
     obj_handle_t   handle;
@@ -3704,6 +3692,14 @@ struct handle_info
     apc_param_t    cvalue;        /* completion value */
     apc_param_t    information;   /* IO_STATUS_BLOCK Information */
     unsigned int   status;        /* completion status */
+    int            async;         /* completion is an async result */
+@END
+
+
+/* set fd completion information */
+@REQ(set_fd_completion_mode)
+    obj_handle_t handle;          /* handle to a file or directory */
+    unsigned int flags;           /* completion notification flags */
 @END
 
 

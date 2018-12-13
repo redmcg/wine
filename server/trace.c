@@ -3023,21 +3023,6 @@ static void dump_create_named_pipe_reply( const struct create_named_pipe_reply *
     fprintf( stderr, " handle=%04x", req->handle );
 }
 
-static void dump_get_named_pipe_info_request( const struct get_named_pipe_info_request *req )
-{
-    fprintf( stderr, " handle=%04x", req->handle );
-}
-
-static void dump_get_named_pipe_info_reply( const struct get_named_pipe_info_reply *req )
-{
-    fprintf( stderr, " flags=%08x", req->flags );
-    fprintf( stderr, ", sharing=%08x", req->sharing );
-    fprintf( stderr, ", maxinstances=%08x", req->maxinstances );
-    fprintf( stderr, ", instances=%08x", req->instances );
-    fprintf( stderr, ", outsize=%08x", req->outsize );
-    fprintf( stderr, ", insize=%08x", req->insize );
-}
-
 static void dump_set_named_pipe_info_request( const struct set_named_pipe_info_request *req )
 {
     fprintf( stderr, " handle=%04x", req->handle );
@@ -4398,6 +4383,13 @@ static void dump_add_fd_completion_request( const struct add_fd_completion_reque
     dump_uint64( ", cvalue=", &req->cvalue );
     dump_uint64( ", information=", &req->information );
     fprintf( stderr, ", status=%08x", req->status );
+    fprintf( stderr, ", async=%d", req->async );
+}
+
+static void dump_set_fd_completion_mode_request( const struct set_fd_completion_mode_request *req )
+{
+    fprintf( stderr, " handle=%04x", req->handle );
+    fprintf( stderr, ", flags=%08x", req->flags );
 }
 
 static void dump_set_fd_disp_info_request( const struct set_fd_disp_info_request *req )
@@ -4750,7 +4742,6 @@ static const dump_func req_dumpers[REQ_NB_REQUESTS] = {
     (dump_func)dump_ioctl_request,
     (dump_func)dump_set_irp_result_request,
     (dump_func)dump_create_named_pipe_request,
-    (dump_func)dump_get_named_pipe_info_request,
     (dump_func)dump_set_named_pipe_info_request,
     (dump_func)dump_create_window_request,
     (dump_func)dump_destroy_window_request,
@@ -4866,6 +4857,7 @@ static const dump_func req_dumpers[REQ_NB_REQUESTS] = {
     (dump_func)dump_query_completion_request,
     (dump_func)dump_set_completion_info_request,
     (dump_func)dump_add_fd_completion_request,
+    (dump_func)dump_set_fd_completion_mode_request,
     (dump_func)dump_set_fd_disp_info_request,
     (dump_func)dump_set_fd_name_info_request,
     (dump_func)dump_get_window_layered_info_request,
@@ -5047,7 +5039,6 @@ static const dump_func reply_dumpers[REQ_NB_REQUESTS] = {
     (dump_func)dump_ioctl_reply,
     NULL,
     (dump_func)dump_create_named_pipe_reply,
-    (dump_func)dump_get_named_pipe_info_reply,
     NULL,
     (dump_func)dump_create_window_reply,
     NULL,
@@ -5161,6 +5152,7 @@ static const dump_func reply_dumpers[REQ_NB_REQUESTS] = {
     NULL,
     (dump_func)dump_remove_completion_reply,
     (dump_func)dump_query_completion_reply,
+    NULL,
     NULL,
     NULL,
     NULL,
@@ -5344,7 +5336,6 @@ static const char * const req_names[REQ_NB_REQUESTS] = {
     "ioctl",
     "set_irp_result",
     "create_named_pipe",
-    "get_named_pipe_info",
     "set_named_pipe_info",
     "create_window",
     "destroy_window",
@@ -5460,6 +5451,7 @@ static const char * const req_names[REQ_NB_REQUESTS] = {
     "query_completion",
     "set_completion_info",
     "add_fd_completion",
+    "set_fd_completion_mode",
     "set_fd_disp_info",
     "set_fd_name_info",
     "get_window_layered_info",
@@ -5548,6 +5540,7 @@ static const struct
     { "INVALID_LOCK_SEQUENCE",       STATUS_INVALID_LOCK_SEQUENCE },
     { "INVALID_OWNER",               STATUS_INVALID_OWNER },
     { "INVALID_PARAMETER",           STATUS_INVALID_PARAMETER },
+    { "INVALID_PARAMETER_4",         STATUS_INVALID_PARAMETER_4 },
     { "INVALID_PIPE_STATE",          STATUS_INVALID_PIPE_STATE },
     { "INVALID_READ_MODE",           STATUS_INVALID_READ_MODE },
     { "INVALID_SECURITY_DESCR",      STATUS_INVALID_SECURITY_DESCR },

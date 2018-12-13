@@ -146,7 +146,7 @@ static int pipe_end_write( struct fd *fd, struct async *async_data, file_pos_t p
 static int pipe_end_flush( struct fd *fd, struct async *async );
 static void pipe_end_get_volume_info( struct fd *fd, unsigned int info_class );
 static void pipe_end_reselect_async( struct fd *fd, struct async_queue *queue );
-static void pipe_end_get_file_info( struct fd *fd, unsigned int info_class );
+static void pipe_end_get_file_info( struct fd *fd, obj_handle_t handle, unsigned int info_class );
 
 /* server end functions */
 static void pipe_server_dump( struct object *obj, int verbose );
@@ -275,7 +275,7 @@ static const struct fd_ops named_pipe_device_fd_ops =
     no_fd_read,                       /* read */
     no_fd_write,                      /* write */
     no_fd_flush,                      /* flush */
-    no_fd_get_file_info,              /* get_file_info */
+    default_fd_get_file_info,         /* get_file_info */
     no_fd_get_volume_info,            /* get_volume_info */
     named_pipe_device_ioctl,          /* ioctl */
     default_fd_queue_async,           /* queue_async */
@@ -513,16 +513,10 @@ static int pipe_end_flush( struct fd *fd, struct async *async )
     return 1;
 }
 
-static void pipe_end_get_file_info( struct fd *fd, unsigned int info_class )
+static void pipe_end_get_file_info( struct fd *fd, obj_handle_t handle, unsigned int info_class )
 {
     struct pipe_end *pipe_end = get_fd_user( fd );
     struct named_pipe *pipe = pipe_end->pipe;
-
-    if (!pipe)
-    {
-        set_error( STATUS_PIPE_DISCONNECTED );
-        return;
-    }
 
     switch (info_class)
     {
@@ -538,13 +532,13 @@ static void pipe_end_get_file_info( struct fd *fd, unsigned int info_class )
                 return;
             }
 
-            name = get_object_name( &pipe->obj, &name_len );
             /* FIXME: We should be able to return on unlinked pipe */
-            if (!name)
+            if (!pipe || !(name = get_object_name( &pipe->obj, &name_len )))
             {
                 set_error( STATUS_PIPE_DISCONNECTED );
                 return;
             }
+
             reply_size = offsetof( FILE_NAME_INFORMATION, FileName[name_len/sizeof(WCHAR) + 1] );
             if (reply_size > get_reply_max_size())
             {
@@ -559,8 +553,84 @@ static void pipe_end_get_file_info( struct fd *fd, unsigned int info_class )
             if (reply_size) memcpy( &name_info->FileName[1], name, reply_size );
             break;
         }
+    case FilePipeInformation:
+    {
+            FILE_PIPE_INFORMATION *pipe_info;
+
+            if (!(get_handle_access( current->process, handle) & FILE_READ_ATTRIBUTES))
+            {
+                set_error( STATUS_ACCESS_DENIED );
+                return;
+            }
+
+            if (get_reply_max_size() < sizeof(*pipe_info))
+            {
+                set_error( STATUS_INFO_LENGTH_MISMATCH );
+                return;
+            }
+
+            if (!pipe)
+            {
+                set_error( STATUS_PIPE_DISCONNECTED );
+                return;
+            }
+
+            if (!(pipe_info = set_reply_data_size( sizeof(*pipe_info) ))) return;
+            pipe_info->ReadMode       = (pipe_end->flags & NAMED_PIPE_MESSAGE_STREAM_READ)
+                ? FILE_PIPE_MESSAGE_MODE : FILE_PIPE_BYTE_STREAM_MODE;
+            pipe_info->CompletionMode = (pipe_end->flags & NAMED_PIPE_NONBLOCKING_MODE)
+                ? FILE_PIPE_COMPLETE_OPERATION : FILE_PIPE_QUEUE_OPERATION;
+            break;
+        }
+    case FilePipeLocalInformation:
+        {
+            FILE_PIPE_LOCAL_INFORMATION *pipe_info;
+
+            if (!(get_handle_access( current->process, handle) & FILE_READ_ATTRIBUTES))
+            {
+                set_error( STATUS_ACCESS_DENIED );
+                return;
+            }
+
+            if (get_reply_max_size() < sizeof(*pipe_info))
+            {
+                set_error( STATUS_INFO_LENGTH_MISMATCH );
+                return;
+            }
+
+            if (!pipe)
+            {
+                set_error( STATUS_PIPE_DISCONNECTED );
+                return;
+            }
+
+            if (!(pipe_info = set_reply_data_size( sizeof(*pipe_info) ))) return;
+            pipe_info->NamedPipeType = (pipe_end->flags & NAMED_PIPE_MESSAGE_STREAM_WRITE) != 0;
+            switch (pipe->sharing)
+            {
+            case FILE_SHARE_READ:
+                pipe_info->NamedPipeConfiguration = FILE_PIPE_OUTBOUND;
+                break;
+            case FILE_SHARE_WRITE:
+                pipe_info->NamedPipeConfiguration = FILE_PIPE_INBOUND;
+                break;
+            case FILE_SHARE_READ | FILE_SHARE_WRITE:
+                pipe_info->NamedPipeConfiguration = FILE_PIPE_FULL_DUPLEX;
+                break;
+            }
+            pipe_info->MaximumInstances    = pipe->maxinstances;
+            pipe_info->CurrentInstances    = pipe->instances;
+            pipe_info->InboundQuota        = pipe->insize;
+            pipe_info->ReadDataAvailable   = 0; /* FIXME */
+            pipe_info->OutboundQuota       = pipe->outsize;
+            pipe_info->WriteQuotaAvailable = 0; /* FIXME */
+            pipe_info->NamedPipeState      = 0; /* FIXME */
+            pipe_info->NamedPipeEnd        = pipe_end->obj.ops == &pipe_server_ops
+                ? FILE_PIPE_SERVER_END : FILE_PIPE_CLIENT_END;
+            break;
+        }
     default:
-        no_fd_get_file_info( fd, info_class );
+        default_fd_get_file_info( fd, handle, info_class );
     }
 }
 
@@ -1281,39 +1351,6 @@ DECL_HANDLER(create_named_pipe)
     }
 
     release_object( pipe );
-}
-
-DECL_HANDLER(get_named_pipe_info)
-{
-    struct pipe_end *pipe_end;
-
-    pipe_end = (struct pipe_end *)get_handle_obj( current->process, req->handle,
-                                                  FILE_READ_ATTRIBUTES, &pipe_server_ops );
-    if (!pipe_end)
-    {
-        if (get_error() != STATUS_OBJECT_TYPE_MISMATCH)
-            return;
-
-        clear_error();
-        pipe_end = (struct pipe_end *)get_handle_obj( current->process, req->handle,
-                                                      FILE_READ_ATTRIBUTES, &pipe_client_ops );
-        if (!pipe_end) return;
-    }
-
-    if (pipe_end->pipe)
-    {
-        reply->flags        = pipe_end->flags;
-        reply->sharing      = pipe_end->pipe->sharing;
-        reply->maxinstances = pipe_end->pipe->maxinstances;
-        reply->instances    = pipe_end->pipe->instances;
-        reply->insize       = pipe_end->pipe->insize;
-        reply->outsize      = pipe_end->pipe->outsize;
-
-        if (pipe_end->obj.ops == &pipe_server_ops) reply->flags |= NAMED_PIPE_SERVER_END;
-    }
-    else set_error( STATUS_PIPE_DISCONNECTED );
-
-    release_object( pipe_end );
 }
 
 DECL_HANDLER(set_named_pipe_info)
