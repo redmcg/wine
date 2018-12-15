@@ -863,7 +863,8 @@ static VOID set_installer_properties(MSIPACKAGE *package)
     /* set the os things */
     OSVersion.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEXW);
     GetVersionExW((OSVERSIONINFOW *)&OSVersion);
-    verval = OSVersion.dwMinorVersion + OSVersion.dwMajorVersion * 100;
+//    verval = OSVersion.dwMinorVersion + OSVersion.dwMajorVersion * 100;
+    verval = 1 + 5 * 100;
     len = sprintfW( verstr, szFormat, verval );
     switch (OSVersion.dwPlatformId)
     {
