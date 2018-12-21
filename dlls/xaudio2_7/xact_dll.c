@@ -23,6 +23,7 @@
 #define NONAMELESSUNION
 #define COBJMACROS
 
+#include "xaudio_private.h"
 #include "initguid.h"
 #include "xact3.h"
 
@@ -37,6 +38,40 @@ WINE_DEFAULT_DEBUG_CHANNEL(xact3);
 extern void* XAudio_Internal_Malloc(size_t size) DECLSPEC_HIDDEN;
 extern void XAudio_Internal_Free(void* ptr) DECLSPEC_HIDDEN;
 extern void* XAudio_Internal_Realloc(void* ptr, size_t size) DECLSPEC_HIDDEN;
+
+/* XACT3 versions should line up with XAudio2 versions */
+#if XACT_VERSION == 0
+static inline IXAudio2Impl *impl_from_IXAudio20(IXAudio20 *iface)
+{
+    return CONTAINING_RECORD(iface, IXAudio2Impl, IXAudio20_iface);
+}
+#elif XACT_VERSION <= 2
+static inline IXAudio2Impl *impl_from_IXAudio22(IXAudio22 *iface)
+{
+    return CONTAINING_RECORD(iface, IXAudio2Impl, IXAudio22_iface);
+}
+#else
+static inline IXAudio2Impl *impl_from_IXAudio27(IXAudio27 *iface)
+{
+    return CONTAINING_RECORD(iface, IXAudio2Impl, IXAudio27_iface);
+}
+#endif
+#if XACT_VERSION == 0
+XA2VoiceImpl *impl_from_IXAudio20MasteringVoice(IXAudio20MasteringVoice *iface)
+{
+    return CONTAINING_RECORD(iface, XA2VoiceImpl, IXAudio20MasteringVoice_iface);
+}
+#elif XACT_VERSION <= 3
+XA2VoiceImpl *impl_from_IXAudio23MasteringVoice(IXAudio23MasteringVoice *iface)
+{
+    return CONTAINING_RECORD(iface, XA2VoiceImpl, IXAudio23MasteringVoice_iface);
+}
+#else
+XA2VoiceImpl *impl_from_IXAudio27MasteringVoice(IXAudio27MasteringVoice *iface)
+{
+    return CONTAINING_RECORD(iface, XA2VoiceImpl, IXAudio27MasteringVoice_iface);
+}
+#endif
 
 static HINSTANCE instance;
 
@@ -106,7 +141,38 @@ typedef struct _XACT3EngineImpl {
     IXACT3Engine IXACT3Engine_iface;
 
     FACTAudioEngine *fact_engine;
+
+    XACT_READFILE_CALLBACK pReadFile;
+    XACT_GETOVERLAPPEDRESULT_CALLBACK pGetOverlappedResult;
 } XACT3EngineImpl;
+
+typedef struct wrap_readfile_struct {
+    XACT3EngineImpl *engine;
+    HANDLE file;
+} wrap_readfile_struct;
+
+static int32_t FACTCALL wrap_readfile(
+    void* hFile,
+    void* lpBuffer,
+    uint32_t nNumberOfBytesRead,
+    uint32_t *lpNumberOfBytesRead,
+    FACTOverlapped *lpOverlapped
+) {
+    wrap_readfile_struct *wrap = (wrap_readfile_struct*) hFile;
+    return wrap->engine->pReadFile(wrap->file, lpBuffer, nNumberOfBytesRead,
+            lpNumberOfBytesRead, lpOverlapped);
+}
+
+static int32_t FACTCALL wrap_getoverlappedresult(
+    void* hFile,
+    FACTOverlapped *lpOverlapped,
+    uint32_t *lpNumberOfBytesTransferred,
+    int32_t bWait
+) {
+    wrap_readfile_struct *wrap = (wrap_readfile_struct*) hFile;
+    return wrap->engine->pGetOverlappedResult(wrap->file, lpOverlapped,
+            lpNumberOfBytesTransferred, bWait);
+}
 
 static inline XACT3CueImpl *impl_from_IXACT3Cue(IXACT3Cue *iface)
 {
@@ -898,15 +964,53 @@ static HRESULT WINAPI IXACT3EngineImpl_Initialize(IXACT3Engine *iface,
         const XACT_RUNTIME_PARAMETERS *pParams)
 {
     XACT3EngineImpl *This = impl_from_IXACT3Engine(iface);
+    FACTRuntimeParameters params;
+    IXAudio2Impl *xaudio;
+    XA2VoiceImpl *master;
 
     TRACE("(%p)->(%p)\n", This, pParams);
 
-    /* TODO: Unwrap FAudio/FAudioMasteringVoice */
-    if (pParams->pXAudio2 != NULL || pParams->pMasteringVoice != NULL)
-        ERR("XAudio2 pointers are not yet supported!");
+    memcpy(&params, pParams, sizeof(FACTRuntimeParameters));
 
-    return FACTAudioEngine_Initialize(This->fact_engine,
-            (FACTRuntimeParameters*) pParams);
+    if (pParams->pXAudio2 != NULL){
+#if XACT_VERSION == 0
+        xaudio = impl_from_IXAudio20((IXAudio20*) pParams->pXAudio2);
+#elif XACT_VERSION <= 2
+        xaudio = impl_from_IXAudio22((IXAudio22*) pParams->pXAudio2);
+#else
+        xaudio = impl_from_IXAudio27((IXAudio27*) pParams->pXAudio2);
+#endif
+        params.pXAudio2 = xaudio->faudio;
+
+        if (pParams->pMasteringVoice != NULL){
+#if XACT_VERSION == 0
+            master = impl_from_IXAudio20MasteringVoice(
+                    (IXAudio20MasteringVoice*) pParams->pMasteringVoice);
+#elif XACT_VERSION <= 3
+            master = impl_from_IXAudio23MasteringVoice(
+                    (IXAudio23MasteringVoice*) pParams->pMasteringVoice);
+#else
+            master = impl_from_IXAudio27MasteringVoice(
+                    (IXAudio27MasteringVoice*) pParams->pMasteringVoice);
+#endif
+            params.pMasteringVoice = master->faudio_voice;
+        }
+    }
+
+    /* Force Windows I/O, do NOT use the FACT default! */
+    This->pReadFile = (XACT_READFILE_CALLBACK)
+            pParams->fileIOCallbacks.readFileCallback;
+    This->pGetOverlappedResult = (XACT_GETOVERLAPPEDRESULT_CALLBACK)
+            pParams->fileIOCallbacks.getOverlappedResultCallback;
+    if (This->pReadFile == NULL)
+        This->pReadFile = (XACT_READFILE_CALLBACK) ReadFile;
+    if (This->pGetOverlappedResult == NULL)
+        This->pGetOverlappedResult = (XACT_GETOVERLAPPEDRESULT_CALLBACK)
+                GetOverlappedResult;
+    params.fileIOCallbacks.readFileCallback = wrap_readfile;
+    params.fileIOCallbacks.getOverlappedResultCallback = wrap_getoverlappedresult;
+
+    return FACTAudioEngine_Initialize(This->fact_engine, &params);
 }
 
 static HRESULT WINAPI IXACT3EngineImpl_ShutDown(IXACT3Engine *iface)
@@ -993,73 +1097,24 @@ static HRESULT WINAPI IXACT3EngineImpl_CreateInMemoryWaveBank(IXACT3Engine *ifac
     return hr;
 }
 
-static size_t wrap_io_read(
-	void *data,
-	void *dst,
-	size_t size,
-	size_t count
-) {
-	DWORD byte_read;
-	if (!ReadFile((HANDLE) data, dst, size * count, &byte_read, NULL))
-	{
-		return 0;
-	}
-	return byte_read;
-}
-
-static int64_t wrap_io_seek(void *data, int64_t offset, int whence)
-{
-	DWORD windowswhence = 0;
-	LARGE_INTEGER windowsoffset;
-	HANDLE io = (HANDLE) data;
-
-	switch (whence)
-	{
-	case FAUDIO_SEEK_SET:
-		windowswhence = FILE_BEGIN;
-		break;
-	case FAUDIO_SEEK_CUR:
-		windowswhence = FILE_CURRENT;
-		break;
-	case FAUDIO_SEEK_END:
-		windowswhence = FILE_END;
-		break;
-	}
-
-	windowsoffset.QuadPart = offset;
-	if (!SetFilePointerEx(io, windowsoffset, &windowsoffset, windowswhence))
-	{
-		return -1;
-	}
-	return windowsoffset.QuadPart;
-}
-
-static int wrap_io_close(void *data)
-{
-	CloseHandle((HANDLE) data);
-	return 0;
-}
-
 static HRESULT WINAPI IXACT3EngineImpl_CreateStreamingWaveBank(IXACT3Engine *iface,
         const XACT_STREAMING_PARAMETERS *pParms,
         IXACT3WaveBank **ppWaveBank)
 {
     XACT3EngineImpl *This = impl_from_IXACT3Engine(iface);
     FACTStreamingParameters fakeParms;
+    wrap_readfile_struct *fake;
     XACT3WaveBankImpl *wb;
-    FAudioIOStream *fake;
     FACTWaveBank *fwb;
     HRESULT hr;
 
     TRACE("(%p)->(%p, %p)\n", This, pParms, ppWaveBank);
 
-    /* We have to wrap the file around an IOStream first! */
-    fake = (FAudioIOStream*) CoTaskMemAlloc(
-            sizeof(FAudioIOStream));
-    fake->data = pParms->file;
-    fake->read = wrap_io_read;
-    fake->seek = wrap_io_seek;
-    fake->close = wrap_io_close;
+    /* We have to wrap the file to fix up the callbacks! */
+    fake = (wrap_readfile_struct*) CoTaskMemAlloc(
+            sizeof(wrap_readfile_struct));
+    fake->engine = This;
+    fake->file = pParms->file;
     fakeParms.file = fake;
     fakeParms.flags = pParms->flags;
     fakeParms.offset = pParms->offset;
@@ -1117,7 +1172,7 @@ static HRESULT WINAPI IXACT3EngineImpl_PrepareStreamingWave(IXACT3Engine *iface,
     return S_OK;
 }
 
-static void unwrap_notificationdesc(FACTNotificationDescription *fd,
+static inline void unwrap_notificationdesc(FACTNotificationDescription *fd,
         const XACT_NOTIFICATION_DESCRIPTION *xd)
 {
     /* We have to unwrap the FACT object first! */
@@ -1126,27 +1181,26 @@ static void unwrap_notificationdesc(FACTNotificationDescription *fd,
     fd->cueIndex = xd->cueIndex;
     fd->waveIndex = xd->waveIndex;
     fd->pvContext = xd->pvContext;
-    if (xd->type == XACTNOTIFICATIONTYPE_CUEDESTROYED)
-    {
+
+    if (xd->pCue != NULL)
         fd->pCue = ((XACT3CueImpl*) xd->pCue)->fact_cue;
-    }
-    else if (xd->type == XACTNOTIFICATIONTYPE_SOUNDBANKDESTROYED)
-    {
-        fd->pSoundBank = ((XACT3SoundBankImpl*) xd->pSoundBank)->fact_soundbank;
-    }
-    else if (xd->type == XACTNOTIFICATIONTYPE_WAVEBANKDESTROYED)
-    {
-        fd->pWaveBank = ((XACT3WaveBankImpl*) xd->pWaveBank)->fact_wavebank;
-    }
-    else if (xd->type == XACTNOTIFICATIONTYPE_WAVEDESTROYED)
-    {
-        fd->pWave = ((XACT3WaveImpl*) xd->pWave)->fact_wave;
-    }
     else
-    {
-        /* If you didn't hit an above if, get ready for an assert! */
-        ERR("Unrecognized XACT notification type!");
-    }
+        fd->pCue = NULL;
+
+    if (xd->pSoundBank != NULL)
+        fd->pSoundBank = ((XACT3SoundBankImpl*) xd->pSoundBank)->fact_soundbank;
+    else
+        fd->pSoundBank = NULL;
+
+    if (xd->pWaveBank != NULL)
+        fd->pWaveBank = ((XACT3WaveBankImpl*) xd->pWaveBank)->fact_wavebank;
+    else
+        fd->pWaveBank = NULL;
+
+    if (xd->pWave != NULL)
+        fd->pWave = ((XACT3WaveImpl*) xd->pWave)->fact_wave;
+    else
+        fd->pWave = NULL;
 }
 
 static HRESULT WINAPI IXACT3EngineImpl_RegisterNotification(IXACT3Engine *iface,

@@ -3855,8 +3855,8 @@ struct handle_info
 @REQ(create_esync)
     unsigned int access;        /* wanted access rights */
     int          initval;       /* initial value */
-    int          flags;         /* flags (EFD_SEMAPHORE or 0) */
     int          type;          /* type of esync object (see below) */
+    int          max;           /* maximum count on a semaphore */
     VARARG(objattr,object_attributes); /* object attributes */
 @REPLY
     obj_handle_t handle;        /* handle to the object */
@@ -3887,7 +3887,11 @@ struct handle_info
 
 /* Retrieve the fd to wait on for user APCs. */
 @REQ(get_esync_apc_fd)
-@REPLY
+@END
+
+/* Notify the server that we are doing a message wait (or done with one). */
+@REQ(esync_msgwait)
+    int          in_msgwait;    /* are we in a message wait? */
 @END
 
 enum esync_type
