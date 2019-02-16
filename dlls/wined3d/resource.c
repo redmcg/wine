@@ -55,8 +55,8 @@ static void resource_check_usage(DWORD usage)
 
 HRESULT resource_init(struct wined3d_resource *resource, struct wined3d_device *device,
         enum wined3d_resource_type type, const struct wined3d_format *format,
-        enum wined3d_multisample_type multisample_type, unsigned int multisample_quality,
-        unsigned int usage, unsigned int access, unsigned int width, unsigned int height, unsigned int depth,
+        enum wined3d_multisample_type multisample_type, unsigned int multisample_quality, unsigned int usage,
+        unsigned int bind_flags, unsigned int access, unsigned int width, unsigned int height, unsigned int depth,
         unsigned int size, void *parent, const struct wined3d_parent_ops *parent_ops,
         const struct wined3d_resource_ops *resource_ops)
 {
@@ -181,6 +181,7 @@ HRESULT resource_init(struct wined3d_resource *resource, struct wined3d_device *
     resource->multisample_type = multisample_type;
     resource->multisample_quality = multisample_quality;
     resource->usage = usage;
+    resource->bind_flags = bind_flags;
     resource->access = access;
     resource->width = width;
     resource->height = height;
@@ -286,6 +287,7 @@ void CDECL wined3d_resource_get_desc(const struct wined3d_resource *resource, st
     desc->multisample_type = resource->multisample_type;
     desc->multisample_quality = resource->multisample_quality;
     desc->usage = resource->usage;
+    desc->bind_flags = resource->bind_flags;
     desc->access = resource->access;
     desc->width = resource->width;
     desc->height = resource->height;

@@ -216,6 +216,31 @@ static NTSTATUS find_value(HIDP_REPORT_TYPE ReportType, USAGE UsagePage, USHORT 
     return HIDP_STATUS_USAGE_NOT_FOUND;
 }
 
+static LONG sign_extend(ULONG value, const WINE_HID_ELEMENT *element)
+{
+    UINT bit_count = element->bitCount;
+
+    if ((value & (1 << (bit_count - 1)))
+            && element->ElementType == ValueElement
+            && element->caps.value.LogicalMin < 0)
+    {
+        value -= (1 << bit_count);
+    }
+    return value;
+}
+
+static LONG logical_to_physical(LONG value, const WINE_HID_ELEMENT *element)
+{
+    if (element->caps.value.PhysicalMin || element->caps.value.PhysicalMax)
+    {
+        value = (((ULONGLONG)(value - element->caps.value.LogicalMin)
+                * (element->caps.value.PhysicalMax - element->caps.value.PhysicalMin))
+                / (element->caps.value.LogicalMax - element->caps.value.LogicalMin))
+                + element->caps.value.PhysicalMin;
+    }
+    return value;
+}
+
 NTSTATUS WINAPI HidP_GetScaledUsageValue(HIDP_REPORT_TYPE ReportType, USAGE UsagePage,
                                          USHORT LinkCollection, USAGE Usage, PLONG UsageValue,
                                          PHIDP_PREPARSED_DATA PreparsedData, PCHAR Report, ULONG ReportLength)
@@ -234,9 +259,7 @@ NTSTATUS WINAPI HidP_GetScaledUsageValue(HIDP_REPORT_TYPE ReportType, USAGE Usag
                              element->valueStartBit, element->bitCount, &rawValue);
         if (rc != HIDP_STATUS_SUCCESS)
             return rc;
-        if (element->caps.value.BitSize == 16)
-            rawValue = (short)rawValue;
-        *UsageValue = rawValue;
+        *UsageValue = logical_to_physical(sign_extend(rawValue, element), element);
     }
 
     return rc;
@@ -860,8 +883,6 @@ NTSTATUS WINAPI HidP_GetData(HIDP_REPORT_TYPE ReportType, HIDP_DATA *DataList, U
                                      element->valueStartBit, element->bitCount, &v);
                 if (rc != HIDP_STATUS_SUCCESS)
                     return rc;
-                if (element->caps.value.BitSize == 16)
-                    v = (short)v;
                 DataList[uCount].DataIndex = element->caps.value.u.NotRange.DataIndex;
                 DataList[uCount].u.RawValue = v;
             }

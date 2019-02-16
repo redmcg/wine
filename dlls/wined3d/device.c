@@ -578,6 +578,7 @@ static void device_load_logo(struct wined3d_device *device, const char *filename
     desc.multisample_type = WINED3D_MULTISAMPLE_NONE;
     desc.multisample_quality = 0;
     desc.usage = WINED3DUSAGE_DYNAMIC;
+    desc.bind_flags = 0;
     desc.access = WINED3D_RESOURCE_ACCESS_GPU;
     desc.width = bm.bmWidth;
     desc.height = bm.bmHeight;
@@ -1093,7 +1094,7 @@ HRESULT CDECL wined3d_device_init_3d(struct wined3d_device *device,
         goto err_out;
     }
 
-    if (swapchain_desc->backbuffer_count && swapchain_desc->backbuffer_usage & WINED3DUSAGE_RENDERTARGET)
+    if (swapchain_desc->backbuffer_count && swapchain_desc->backbuffer_bind_flags & WINED3D_BIND_RENDER_TARGET)
     {
         struct wined3d_resource *back_buffer = &swapchain->back_buffers[0]->resource;
         struct wined3d_view_desc view_desc;
@@ -3299,7 +3300,7 @@ HRESULT CDECL wined3d_device_process_vertices(struct wined3d_device *device,
     struct wined3d_resource *resource;
     struct wined3d_box box = {0};
     struct wined3d_shader *vs;
-    unsigned int i;
+    unsigned int i, j;
     HRESULT hr;
     WORD map;
 
@@ -3334,7 +3335,20 @@ HRESULT CDECL wined3d_device_process_vertices(struct wined3d_device *device,
         box.left = src_start_idx * e->stride;
         box.right = box.left + vertex_count * e->stride;
         if (FAILED(wined3d_resource_map(resource, 0, &map_desc, &box, WINED3D_MAP_READ)))
+        {
             ERR("Failed to map resource.\n");
+            for (j = 0, map = stream_info.use_map; map && j < i; map >>= 1, ++j)
+            {
+                if (!(map & 1))
+                    continue;
+
+                e = &stream_info.elements[j];
+                resource = &state->streams[e->stream_idx].buffer->resource;
+                if (FAILED(wined3d_resource_unmap(resource, 0)))
+                    ERR("Failed to unmap resource.\n");
+            }
+            return WINED3DERR_INVALIDCALL;
+        }
         e->data.buffer_object = 0;
         e->data.addr += (ULONG_PTR)map_desc.data;
     }
@@ -4513,6 +4527,7 @@ static struct wined3d_texture *wined3d_device_create_cursor_texture(struct wined
     desc.multisample_type = WINED3D_MULTISAMPLE_NONE;
     desc.multisample_quality = 0;
     desc.usage = WINED3DUSAGE_DYNAMIC;
+    desc.bind_flags = 0;
     desc.access = WINED3D_RESOURCE_ACCESS_GPU;
     desc.width = wined3d_texture_get_level_width(cursor_image, texture_level);
     desc.height = wined3d_texture_get_level_height(cursor_image, texture_level);
@@ -4786,8 +4801,8 @@ HRESULT CDECL wined3d_device_reset(struct wined3d_device *device,
     TRACE("refresh_rate %u\n", swapchain_desc->refresh_rate);
     TRACE("auto_restore_display_mode %#x\n", swapchain_desc->auto_restore_display_mode);
 
-    if (swapchain_desc->backbuffer_usage && swapchain_desc->backbuffer_usage != WINED3DUSAGE_RENDERTARGET)
-        FIXME("Got unexpected backbuffer usage %#x.\n", swapchain_desc->backbuffer_usage);
+    if (swapchain_desc->backbuffer_bind_flags && swapchain_desc->backbuffer_bind_flags != WINED3D_BIND_RENDER_TARGET)
+        FIXME("Got unexpected backbuffer bind flags %#x.\n", swapchain_desc->backbuffer_bind_flags);
 
     if (swapchain_desc->swap_effect != WINED3D_SWAP_EFFECT_DISCARD
             && swapchain_desc->swap_effect != WINED3D_SWAP_EFFECT_SEQUENTIAL
@@ -4862,6 +4877,7 @@ HRESULT CDECL wined3d_device_reset(struct wined3d_device *device,
         texture_desc.multisample_type = swapchain->desc.multisample_type;
         texture_desc.multisample_quality = swapchain->desc.multisample_quality;
         texture_desc.usage = WINED3DUSAGE_DEPTHSTENCIL;
+        texture_desc.bind_flags = WINED3D_BIND_DEPTH_STENCIL;
         texture_desc.access = WINED3D_RESOURCE_ACCESS_GPU;
         texture_desc.width = swapchain->desc.backbuffer_width;
         texture_desc.height = swapchain->desc.backbuffer_height;
@@ -4901,7 +4917,7 @@ HRESULT CDECL wined3d_device_reset(struct wined3d_device *device,
         wined3d_rendertarget_view_decref(device->back_buffer_view);
         device->back_buffer_view = NULL;
     }
-    if (swapchain->desc.backbuffer_count && swapchain->desc.backbuffer_usage & WINED3DUSAGE_RENDERTARGET)
+    if (swapchain->desc.backbuffer_count && swapchain->desc.backbuffer_bind_flags & WINED3D_BIND_RENDER_TARGET)
     {
         struct wined3d_resource *back_buffer = &swapchain->back_buffers[0]->resource;
 
