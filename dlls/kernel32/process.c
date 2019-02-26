@@ -1337,9 +1337,13 @@ static char **build_argv( const WCHAR *cmdlineW, int reserved )
             /* '\', count them */
             bcount++;
         } else if ((*s=='"') && ((bcount & 1)==0)) {
-            /* unescaped '"' */
-            in_quotes=!in_quotes;
-            bcount=0;
+            if (in_quotes && s[1] == '"') {
+               s++;
+            } else {
+               /* unescaped '"' */
+               in_quotes=!in_quotes;
+               bcount=0;
+            }
         } else {
             /* a regular character */
             bcount=0;
@@ -1383,7 +1387,12 @@ static char **build_argv( const WCHAR *cmdlineW, int reserved )
                  */
                 d-=bcount/2;
                 s++;
-                in_quotes=!in_quotes;
+                if(in_quotes && *s == '"') {
+                  *d++='"';
+                  s++;
+                } else {
+                  in_quotes=!in_quotes;
+                }
             } else {
                 /* Preceded by an odd number of '\', this is half that
                  * number of '\' followed by a '"'
