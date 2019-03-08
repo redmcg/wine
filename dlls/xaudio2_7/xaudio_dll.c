@@ -41,14 +41,6 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(xaudio2);
 
-#if XAUDIO2_VER == 0
-#define COMPAT_E_INVALID_CALL E_INVALIDARG
-#define COMPAT_E_DEVICE_INVALIDATED XAUDIO20_E_DEVICE_INVALIDATED
-#else
-#define COMPAT_E_INVALID_CALL XAUDIO2_E_INVALID_CALL
-#define COMPAT_E_DEVICE_INVALIDATED XAUDIO2_E_DEVICE_INVALIDATED
-#endif
-
 #if XAUDIO2_VER != 0 && defined(__i386__)
 /* EVE Online uses an OnVoiceProcessingPassStart callback which corrupts %esi. */
 #define IXAudio2VoiceCallback_OnVoiceProcessingPassStart(a, b) call_on_voice_processing_pass_start(a, b)
@@ -331,7 +323,7 @@ static XA2XAPOImpl *wrap_xapo(IUnknown *unk)
     return ret;
 }
 
-static FAudioEffectChain *wrap_effect_chain(const XAUDIO2_EFFECT_CHAIN *pEffectChain)
+FAudioEffectChain *wrap_effect_chain(const XAUDIO2_EFFECT_CHAIN *pEffectChain)
 {
     FAudioEffectChain *ret;
     int i;
@@ -398,7 +390,6 @@ static inline XA2VoiceImpl *impl_from_FAudioVoiceCallback(FAudioVoiceCallback *i
     return CONTAINING_RECORD(iface, XA2VoiceImpl, FAudioVoiceCallback_vtbl);
 }
 
-/* TODO callback v20 support */
 static void FAUDIOCALL XA2VCB_OnVoiceProcessingPassStart(FAudioVoiceCallback *iface,
         UINT32 BytesRequired)
 {
@@ -1308,14 +1299,10 @@ static void WINAPI XA2M_DestroyVoice(IXAudio2MasteringVoice *iface)
     EnterCriticalSection(&This->lock);
 
     destroy_voice(This);
-#ifdef __APPLE__
-    /* TODO */
-#else
     pthread_mutex_lock(&This->engine_lock);
     This->engine_params.proc = NULL;
     pthread_cond_broadcast(&This->engine_ready);
     pthread_mutex_unlock(&This->engine_lock);
-#endif
 
     WaitForSingleObject(This->engine_thread, INFINITE);
     This->engine_thread = NULL;
@@ -1418,6 +1405,8 @@ static HRESULT WINAPI IXAudio2Impl_QueryInterface(IXAudio2 *iface, REFIID riid,
         *ppvObject = &This->IXAudio20_iface;
 #elif XAUDIO2_VER <= 2
         *ppvObject = &This->IXAudio22_iface;
+#elif XAUDIO2_VER <= 3
+        *ppvObject = &This->IXAudio23_iface;
 #elif XAUDIO2_VER <= 7
         *ppvObject = &This->IXAudio27_iface;
 #else
@@ -1688,7 +1677,7 @@ static HRESULT WINAPI IXAudio2Impl_CreateSubmixVoice(IXAudio2 *iface,
 }
 
 /* called thread created by SDL, must not access Wine TEB */
-static void engine_cb(FAudioEngineCallEXT proc, FAudio *faudio, float *stream, void *user)
+void engine_cb(FAudioEngineCallEXT proc, FAudio *faudio, float *stream, void *user)
 {
     XA2VoiceImpl *This = user;
 
@@ -1707,7 +1696,7 @@ static void engine_cb(FAudioEngineCallEXT proc, FAudio *faudio, float *stream, v
 }
 
 /* wine thread, OK to access TEB, invoke client code, etc */
-static DWORD WINAPI engine_thread(void *user)
+DWORD WINAPI engine_thread(void *user)
 {
     XA2VoiceImpl *This = user;
 
@@ -1744,15 +1733,12 @@ static HRESULT WINAPI IXAudio2Impl_CreateMasteringVoice(IXAudio2 *iface,
 
     EnterCriticalSection(&This->lock);
 
-#if XAUDIO2_VER == 0
-    *ppMasteringVoice = (IXAudio2MasteringVoice*)&This->mst.IXAudio20MasteringVoice_iface;
-#elif XAUDIO2_VER <= 3
-    *ppMasteringVoice = (IXAudio2MasteringVoice*)&This->mst.IXAudio23MasteringVoice_iface;
-#elif XAUDIO2_VER <= 7
-    *ppMasteringVoice = (IXAudio2MasteringVoice*)&This->mst.IXAudio27MasteringVoice_iface;
-#else
+    /* Note that we don't have paths for each XAUDIO2_VER here.
+     * All versions < 8 have a very different CreateMasteringVoice, so we
+     * implement those separately in compat.c.
+     * -flibit
+     */
     *ppMasteringVoice = &This->mst.IXAudio2MasteringVoice_iface;
-#endif
 
     EnterCriticalSection(&This->mst.lock);
 
@@ -1776,8 +1762,9 @@ static HRESULT WINAPI IXAudio2Impl_CreateMasteringVoice(IXAudio2 *iface,
 
     FAudio_SetEngineProcedureEXT(This->faudio, &engine_cb, &This->mst);
 
-    FAudio_CreateMasteringVoice(This->faudio, &This->mst.faudio_voice, inputChannels,
-            inputSampleRate, flags, 0 /* TODO */, This->mst.effect_chain);
+    FAudio_CreateMasteringVoice8(This->faudio, &This->mst.faudio_voice, inputChannels,
+            inputSampleRate, flags, NULL /* TODO: (uint16_t*)deviceId */,
+            This->mst.effect_chain, (FAudioStreamCategory)streamCategory);
 
     This->mst.in_use = TRUE;
 
@@ -1922,6 +1909,8 @@ static HRESULT WINAPI XAudio2CF_CreateInstance(IClassFactory *iface, IUnknown *p
     object->IXAudio20_iface.lpVtbl = &XAudio20_Vtbl;
 #elif XAUDIO2_VER <= 2
     object->IXAudio22_iface.lpVtbl = &XAudio22_Vtbl;
+#elif XAUDIO2_VER <= 3
+    object->IXAudio23_iface.lpVtbl = &XAudio23_Vtbl;
 #elif XAUDIO2_VER <= 7
     object->IXAudio27_iface.lpVtbl = &XAudio27_Vtbl;
 #endif
@@ -1946,13 +1935,9 @@ static HRESULT WINAPI XAudio2CF_CreateInstance(IClassFactory *iface, IUnknown *p
     InitializeCriticalSection(&object->mst.lock);
     object->mst.lock.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": XA2MasteringVoice.lock");
 
-#ifdef __APPLE__
-    /* FIXME */
-#else
     pthread_mutex_init(&object->mst.engine_lock, NULL);
     pthread_cond_init(&object->mst.engine_done, NULL);
     pthread_cond_init(&object->mst.engine_ready, NULL);
-
 
     /* set PulseAudio's application.name in the environment since FAudio and
      * SDL provide no way to pass this in */
@@ -1973,7 +1958,6 @@ static HRESULT WINAPI XAudio2CF_CreateInstance(IClassFactory *iface, IUnknown *p
         setenv("PULSE_PROP_application.name", str, 1);
         HeapFree(GetProcessHeap(), 0, str);
     }
-#endif
 
     FAudioCOMConstructWithCustomAllocatorEXT(
         &object->faudio,

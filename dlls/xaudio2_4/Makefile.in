@@ -6,9 +6,9 @@ EXTRALIBS = $(FAUDIO_LIBS)
 EXTRAINCL = $(FAUDIO_CFLAGS)
 
 C_SRCS = \
-	xaudio_allocator.c \
 	compat.c \
-	xaudio_dll.c \
-	xapo.c
+	xapo.c \
+	xaudio_allocator.c \
+	xaudio_dll.c
 
 IDL_SRCS = xaudio_classes.idl

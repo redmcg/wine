@@ -923,7 +923,7 @@ static HRESULT WINAPI XA20SUB_SetOutputVoices(IXAudio20SubmixVoice *iface,
         const XAUDIO23_VOICE_SENDS *pSendList)
 {
     XA2VoiceImpl *This = impl_from_IXAudio20SubmixVoice(iface);
-    XAUDIO2_VOICE_SENDS sends, *psends;
+    XAUDIO2_VOICE_SENDS sends, *psends = NULL;
     HRESULT hr;
 
     TRACE("%p, %p\n", This, pSendList);
@@ -1483,7 +1483,7 @@ static HRESULT WINAPI XA20M_SetOutputVoices(IXAudio20MasteringVoice *iface,
         const XAUDIO23_VOICE_SENDS *pSendList)
 {
     XA2VoiceImpl *This = impl_from_IXAudio20MasteringVoice(iface);
-    XAUDIO2_VOICE_SENDS sends, *psends;
+    XAUDIO2_VOICE_SENDS sends, *psends = NULL;
     HRESULT hr;
 
     TRACE("%p, %p\n", This, pSendList);
@@ -2115,7 +2115,7 @@ static HRESULT WINAPI XA20_CreateSubmixVoice(IXAudio20 *iface,
         const XAUDIO2_EFFECT_CHAIN *pEffectChain)
 {
     IXAudio2Impl *This = impl_from_IXAudio20(iface);
-    XAUDIO2_VOICE_SENDS sends, *psends;
+    XAUDIO2_VOICE_SENDS sends, *psends = NULL;
     HRESULT hr;
 
     if(pSendList){
@@ -2145,9 +2145,41 @@ static HRESULT WINAPI XA20_CreateMasteringVoice(IXAudio20 *iface,
             inputChannels, inputSampleRate, flags, deviceIndex,
             pEffectChain);
 
-    return IXAudio2_CreateMasteringVoice(&This->IXAudio2_iface, ppMasteringVoice,
-            inputChannels, inputSampleRate, flags, NULL/* TODO: This->devids[deviceIndex]*/,
-            pEffectChain, AudioCategory_GameEffects);
+    EnterCriticalSection(&This->lock);
+
+    /* XAUDIO2_VER == 0 */
+    *ppMasteringVoice = (IXAudio2MasteringVoice*)&This->mst.IXAudio20MasteringVoice_iface;
+
+    EnterCriticalSection(&This->mst.lock);
+
+    if(This->mst.in_use){
+        LeaveCriticalSection(&This->mst.lock);
+        LeaveCriticalSection(&This->lock);
+        return COMPAT_E_INVALID_CALL;
+    }
+
+    LeaveCriticalSection(&This->lock);
+
+    This->mst.effect_chain = wrap_effect_chain(pEffectChain);
+
+    pthread_mutex_lock(&This->mst.engine_lock);
+
+    This->mst.engine_thread = CreateThread(NULL, 0, &engine_thread, &This->mst, 0, NULL);
+
+    pthread_cond_wait(&This->mst.engine_done, &This->mst.engine_lock);
+
+    pthread_mutex_unlock(&This->mst.engine_lock);
+
+    FAudio_SetEngineProcedureEXT(This->faudio, &engine_cb, &This->mst);
+
+    FAudio_CreateMasteringVoice(This->faudio, &This->mst.faudio_voice, inputChannels,
+            inputSampleRate, flags, deviceIndex, This->mst.effect_chain);
+
+    This->mst.in_use = TRUE;
+
+    LeaveCriticalSection(&This->mst.lock);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI XA20_StartEngine(IXAudio20 *iface)
@@ -2318,7 +2350,7 @@ static HRESULT WINAPI XA22_CreateSubmixVoice(IXAudio22 *iface,
         const XAUDIO2_EFFECT_CHAIN *pEffectChain)
 {
     IXAudio2Impl *This = impl_from_IXAudio22(iface);
-    XAUDIO2_VOICE_SENDS sends, *psends;
+    XAUDIO2_VOICE_SENDS sends, *psends = NULL;
     HRESULT hr;
 
     if(pSendList){
@@ -2348,9 +2380,41 @@ static HRESULT WINAPI XA22_CreateMasteringVoice(IXAudio22 *iface,
             inputChannels, inputSampleRate, flags, deviceIndex,
             pEffectChain);
 
-    return IXAudio2_CreateMasteringVoice(&This->IXAudio2_iface, ppMasteringVoice,
-            inputChannels, inputSampleRate, flags, NULL/* TODO: This->devids[deviceIndex]*/,
-            pEffectChain, AudioCategory_GameEffects);
+    EnterCriticalSection(&This->lock);
+
+    /* 1 <= XAUDIO2_VER <= 2 */
+    *ppMasteringVoice = (IXAudio2MasteringVoice*)&This->mst.IXAudio23MasteringVoice_iface;
+
+    EnterCriticalSection(&This->mst.lock);
+
+    if(This->mst.in_use){
+        LeaveCriticalSection(&This->mst.lock);
+        LeaveCriticalSection(&This->lock);
+        return COMPAT_E_INVALID_CALL;
+    }
+
+    LeaveCriticalSection(&This->lock);
+
+    This->mst.effect_chain = wrap_effect_chain(pEffectChain);
+
+    pthread_mutex_lock(&This->mst.engine_lock);
+
+    This->mst.engine_thread = CreateThread(NULL, 0, &engine_thread, &This->mst, 0, NULL);
+
+    pthread_cond_wait(&This->mst.engine_done, &This->mst.engine_lock);
+
+    pthread_mutex_unlock(&This->mst.engine_lock);
+
+    FAudio_SetEngineProcedureEXT(This->faudio, &engine_cb, &This->mst);
+
+    FAudio_CreateMasteringVoice(This->faudio, &This->mst.faudio_voice, inputChannels,
+            inputSampleRate, flags, deviceIndex, This->mst.effect_chain);
+
+    This->mst.in_use = TRUE;
+
+    LeaveCriticalSection(&This->mst.lock);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI XA22_StartEngine(IXAudio22 *iface)
@@ -2422,6 +2486,222 @@ const IXAudio22Vtbl XAudio22_Vtbl = {
     XA22_CommitChanges,
     XA22_GetPerformanceData,
     XA22_SetDebugConfiguration
+};
+
+#elif XAUDIO2_VER <= 3
+
+static inline IXAudio2Impl *impl_from_IXAudio23(IXAudio23 *iface)
+{
+    return CONTAINING_RECORD(iface, IXAudio2Impl, IXAudio23_iface);
+}
+
+static HRESULT WINAPI XA23_QueryInterface(IXAudio23 *iface, REFIID riid,
+        void **ppvObject)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    return IXAudio2_QueryInterface(&This->IXAudio2_iface, riid, ppvObject);
+}
+
+static ULONG WINAPI XA23_AddRef(IXAudio23 *iface)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    return IXAudio2_AddRef(&This->IXAudio2_iface);
+}
+
+static ULONG WINAPI XA23_Release(IXAudio23 *iface)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    return IXAudio2_Release(&This->IXAudio2_iface);
+}
+
+static HRESULT WINAPI XA23_GetDeviceCount(IXAudio23 *iface, UINT32 *pCount)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    TRACE("%p, %p\n", This, pCount);
+    return FAudio_GetDeviceCount(This->faudio, pCount);
+}
+
+static HRESULT WINAPI XA23_GetDeviceDetails(IXAudio23 *iface, UINT32 index,
+        XAUDIO2_DEVICE_DETAILS *pDeviceDetails)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    TRACE("%p, %u, %p\n", This, index, pDeviceDetails);
+    return FAudio_GetDeviceDetails(This->faudio, index, (FAudioDeviceDetails *)pDeviceDetails);
+}
+
+static HRESULT WINAPI XA23_Initialize(IXAudio23 *iface, UINT32 flags,
+        XAUDIO2_PROCESSOR processor)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    TRACE("(%p)->(0x%x, 0x%x)\n", This, flags, processor);
+    return xaudio2_initialize(This, flags, processor);
+}
+
+static HRESULT WINAPI XA23_RegisterForCallbacks(IXAudio23 *iface,
+        IXAudio2EngineCallback *pCallback)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    return IXAudio2_RegisterForCallbacks(&This->IXAudio2_iface, pCallback);
+}
+
+static void WINAPI XA23_UnregisterForCallbacks(IXAudio23 *iface,
+        IXAudio2EngineCallback *pCallback)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    IXAudio2_UnregisterForCallbacks(&This->IXAudio2_iface, pCallback);
+}
+
+static HRESULT WINAPI XA23_CreateSourceVoice(IXAudio23 *iface,
+        IXAudio2SourceVoice **ppSourceVoice, const WAVEFORMATEX *pSourceFormat,
+        UINT32 flags, float maxFrequencyRatio,
+        IXAudio2VoiceCallback *pCallback, const XAUDIO23_VOICE_SENDS *pSendList,
+        const XAUDIO2_EFFECT_CHAIN *pEffectChain)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    XAUDIO2_VOICE_SENDS sends, *psends = NULL;
+    HRESULT hr;
+
+    if(pSendList){
+        sends.SendCount = pSendList->OutputCount;
+        sends.pSends = convert_send_descriptors23(pSendList);
+        psends = &sends;
+    }
+
+    hr = IXAudio2_CreateSourceVoice(&This->IXAudio2_iface, ppSourceVoice,
+            pSourceFormat, flags, maxFrequencyRatio, pCallback, psends,
+            pEffectChain);
+
+    if(pSendList)
+        HeapFree(GetProcessHeap(), 0, sends.pSends);
+
+    return hr;
+}
+
+static HRESULT WINAPI XA23_CreateSubmixVoice(IXAudio23 *iface,
+        IXAudio2SubmixVoice **ppSubmixVoice, UINT32 inputChannels,
+        UINT32 inputSampleRate, UINT32 flags, UINT32 processingStage,
+        const XAUDIO23_VOICE_SENDS *pSendList,
+        const XAUDIO2_EFFECT_CHAIN *pEffectChain)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    XAUDIO2_VOICE_SENDS sends, *psends = NULL;
+    HRESULT hr;
+
+    if(pSendList){
+        sends.SendCount = pSendList->OutputCount;
+        sends.pSends = convert_send_descriptors23(pSendList);
+        psends = &sends;
+    }
+
+    hr = IXAudio2_CreateSubmixVoice(&This->IXAudio2_iface, ppSubmixVoice,
+            inputChannels, inputSampleRate, flags, processingStage, psends,
+            pEffectChain);
+
+    if(pSendList)
+        HeapFree(GetProcessHeap(), 0, sends.pSends);
+
+    return hr;
+}
+
+static HRESULT WINAPI XA23_CreateMasteringVoice(IXAudio23 *iface,
+        IXAudio2MasteringVoice **ppMasteringVoice, UINT32 inputChannels,
+        UINT32 inputSampleRate, UINT32 flags, UINT32 deviceIndex,
+        const XAUDIO2_EFFECT_CHAIN *pEffectChain)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+
+    TRACE("(%p)->(%p, %u, %u, 0x%x, %u, %p)\n", This, ppMasteringVoice,
+            inputChannels, inputSampleRate, flags, deviceIndex,
+            pEffectChain);
+
+    EnterCriticalSection(&This->lock);
+
+    /* XAUDIO2_VER == 3 */
+    *ppMasteringVoice = (IXAudio2MasteringVoice*)&This->mst.IXAudio23MasteringVoice_iface;
+
+    EnterCriticalSection(&This->mst.lock);
+
+    if(This->mst.in_use){
+        LeaveCriticalSection(&This->mst.lock);
+        LeaveCriticalSection(&This->lock);
+        return COMPAT_E_INVALID_CALL;
+    }
+
+    LeaveCriticalSection(&This->lock);
+
+    This->mst.effect_chain = wrap_effect_chain(pEffectChain);
+
+    pthread_mutex_lock(&This->mst.engine_lock);
+
+    This->mst.engine_thread = CreateThread(NULL, 0, &engine_thread, &This->mst, 0, NULL);
+
+    pthread_cond_wait(&This->mst.engine_done, &This->mst.engine_lock);
+
+    pthread_mutex_unlock(&This->mst.engine_lock);
+
+    FAudio_SetEngineProcedureEXT(This->faudio, &engine_cb, &This->mst);
+
+    FAudio_CreateMasteringVoice(This->faudio, &This->mst.faudio_voice, inputChannels,
+            inputSampleRate, flags, deviceIndex, This->mst.effect_chain);
+
+    This->mst.in_use = TRUE;
+
+    LeaveCriticalSection(&This->mst.lock);
+
+    return S_OK;
+}
+
+static HRESULT WINAPI XA23_StartEngine(IXAudio23 *iface)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    return IXAudio2_StartEngine(&This->IXAudio2_iface);
+}
+
+static void WINAPI XA23_StopEngine(IXAudio23 *iface)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    return IXAudio2_StopEngine(&This->IXAudio2_iface);
+}
+
+static HRESULT WINAPI XA23_CommitChanges(IXAudio23 *iface, UINT32 operationSet)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    return IXAudio2_CommitChanges(&This->IXAudio2_iface, operationSet);
+}
+
+static void WINAPI XA23_GetPerformanceData(IXAudio23 *iface,
+        XAUDIO2_PERFORMANCE_DATA *pPerfData)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    return IXAudio2_GetPerformanceData(&This->IXAudio2_iface, pPerfData);
+}
+
+static void WINAPI XA23_SetDebugConfiguration(IXAudio23 *iface,
+        const XAUDIO2_DEBUG_CONFIGURATION *pDebugConfiguration,
+        void *pReserved)
+{
+    IXAudio2Impl *This = impl_from_IXAudio23(iface);
+    return IXAudio2_SetDebugConfiguration(&This->IXAudio2_iface,
+            pDebugConfiguration, pReserved);
+}
+
+const IXAudio23Vtbl XAudio23_Vtbl = {
+    XA23_QueryInterface,
+    XA23_AddRef,
+    XA23_Release,
+    XA23_GetDeviceCount,
+    XA23_GetDeviceDetails,
+    XA23_Initialize,
+    XA23_RegisterForCallbacks,
+    XA23_UnregisterForCallbacks,
+    XA23_CreateSourceVoice,
+    XA23_CreateSubmixVoice,
+    XA23_CreateMasteringVoice,
+    XA23_StartEngine,
+    XA23_StopEngine,
+    XA23_CommitChanges,
+    XA23_GetPerformanceData,
+    XA23_SetDebugConfiguration
 };
 
 #elif XAUDIO2_VER <= 7
@@ -2522,9 +2802,41 @@ static HRESULT WINAPI XA27_CreateMasteringVoice(IXAudio27 *iface,
             inputChannels, inputSampleRate, flags, deviceIndex,
             pEffectChain);
 
-    return IXAudio2_CreateMasteringVoice(&This->IXAudio2_iface, ppMasteringVoice,
-            inputChannels, inputSampleRate, flags, NULL/* TODO: This->devids[deviceIndex]*/,
-            pEffectChain, AudioCategory_GameEffects);
+    EnterCriticalSection(&This->lock);
+
+    /* 4 <= XAUDIO2_VER <= 7 */
+    *ppMasteringVoice = (IXAudio2MasteringVoice*)&This->mst.IXAudio27MasteringVoice_iface;
+
+    EnterCriticalSection(&This->mst.lock);
+
+    if(This->mst.in_use){
+        LeaveCriticalSection(&This->mst.lock);
+        LeaveCriticalSection(&This->lock);
+        return COMPAT_E_INVALID_CALL;
+    }
+
+    LeaveCriticalSection(&This->lock);
+
+    This->mst.effect_chain = wrap_effect_chain(pEffectChain);
+
+    pthread_mutex_lock(&This->mst.engine_lock);
+
+    This->mst.engine_thread = CreateThread(NULL, 0, &engine_thread, &This->mst, 0, NULL);
+
+    pthread_cond_wait(&This->mst.engine_done, &This->mst.engine_lock);
+
+    pthread_mutex_unlock(&This->mst.engine_lock);
+
+    FAudio_SetEngineProcedureEXT(This->faudio, &engine_cb, &This->mst);
+
+    FAudio_CreateMasteringVoice(This->faudio, &This->mst.faudio_voice, inputChannels,
+            inputSampleRate, flags, deviceIndex, This->mst.effect_chain);
+
+    This->mst.in_use = TRUE;
+
+    LeaveCriticalSection(&This->mst.lock);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI XA27_StartEngine(IXAudio27 *iface)

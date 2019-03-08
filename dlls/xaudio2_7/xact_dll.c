@@ -1390,7 +1390,7 @@ static HRESULT WINAPI XACT3CF_CreateInstance(IClassFactory *iface, IUnknown *pOu
     object->IXACT3Engine_iface.lpVtbl = &XACT3Engine_Vtbl;
 
     FACTCreateEngineWithCustomAllocatorEXT(
-	0,
+        0,
         &object->fact_engine,
         XAudio_Internal_Malloc,
         XAudio_Internal_Free,

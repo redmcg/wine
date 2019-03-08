@@ -26,10 +26,14 @@
 #include <FAudio.h>
 #include <FAPO.h>
 
-#ifdef __APPLE__
-/* TODO */
-#else
 #include <pthread.h>
+
+#if XAUDIO2_VER == 0
+#define COMPAT_E_INVALID_CALL E_INVALIDARG
+#define COMPAT_E_DEVICE_INVALIDATED XAUDIO20_E_DEVICE_INVALIDATED
+#else
+#define COMPAT_E_INVALID_CALL XAUDIO2_E_INVALID_CALL
+#define COMPAT_E_DEVICE_INVALIDATED XAUDIO2_E_DEVICE_INVALIDATED
 #endif
 
 typedef struct _XA2XAPOImpl {
@@ -93,13 +97,9 @@ typedef struct _XA2VoiceImpl {
         float *stream;
     } engine_params;
 
-#ifdef __APPLE__
-    /* TODO */
-#else
     HANDLE engine_thread;
     pthread_cond_t engine_done, engine_ready;
     pthread_mutex_t engine_lock;
-#endif
 
     struct list entry;
 } XA2VoiceImpl;
@@ -111,6 +111,8 @@ typedef struct _IXAudio2Impl {
     IXAudio20 IXAudio20_iface;
 #elif XAUDIO2_VER <= 2
     IXAudio22 IXAudio22_iface;
+#elif XAUDIO2_VER <= 3
+    IXAudio23 IXAudio23_iface;
 #elif XAUDIO2_VER <= 7
     IXAudio27 IXAudio27_iface;
 #endif
@@ -158,12 +160,17 @@ extern XA2VoiceImpl *impl_from_IXAudio27MasteringVoice(IXAudio27MasteringVoice *
 extern const IXAudio20Vtbl XAudio20_Vtbl DECLSPEC_HIDDEN;
 #elif XAUDIO2_VER <= 2
 extern const IXAudio22Vtbl XAudio22_Vtbl DECLSPEC_HIDDEN;
+#elif XAUDIO2_VER <= 3
+extern const IXAudio23Vtbl XAudio23_Vtbl DECLSPEC_HIDDEN;
 #elif XAUDIO2_VER <= 7
 extern const IXAudio27Vtbl XAudio27_Vtbl DECLSPEC_HIDDEN;
 #endif
 
 /* xaudio_dll.c */
 extern HRESULT xaudio2_initialize(IXAudio2Impl *This, UINT32 flags, XAUDIO2_PROCESSOR proc) DECLSPEC_HIDDEN;
+extern FAudioEffectChain *wrap_effect_chain(const XAUDIO2_EFFECT_CHAIN *pEffectChain) DECLSPEC_HIDDEN;
+extern void engine_cb(FAudioEngineCallEXT proc, FAudio *faudio, float *stream, void *user) DECLSPEC_HIDDEN;
+extern DWORD WINAPI engine_thread(void *user) DECLSPEC_HIDDEN;
 
 /* xapo.c */
 extern HRESULT make_xapo_factory(REFCLSID clsid, REFIID riid, void **ppv) DECLSPEC_HIDDEN;

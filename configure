@@ -807,6 +807,7 @@ infodir
 docdir
 oldincludedir
 includedir
+runstatedir
 localstatedir
 sharedstatedir
 sysconfdir
@@ -1638,14 +1639,6 @@ enable_x3daudio1_4
 enable_x3daudio1_5
 enable_x3daudio1_6
 enable_x3daudio1_7
-enable_xactengine3_0
-enable_xactengine3_1
-enable_xactengine3_2
-enable_xactengine3_3
-enable_xactengine3_4
-enable_xactengine3_5
-enable_xactengine3_6
-enable_xactengine3_7
 enable_xapofx1_1
 enable_xapofx1_2
 enable_xapofx1_3
@@ -2495,7 +2488,7 @@ Optional Packages:
   --without-cups          do not use CUPS
   --without-curses        do not use (n)curses
   --without-dbus          do not use DBus (dynamic device support)
-  --without-faudio        do not use FAudio (XAudio support)
+  --without-faudio        do not use FAudio (XAudio2 support)
   --with-float-abi=abi    specify the ABI (soft|softfp|hard) for ARM platforms
   --without-fontconfig    do not use fontconfig
   --without-freetype      do not use the FreeType library
@@ -15058,14 +15051,6 @@ then
     enable_x3daudio1_5=${enable_x3daudio1_5:-no}
     enable_x3daudio1_6=${enable_x3daudio1_6:-no}
     enable_x3daudio1_7=${enable_x3daudio1_7:-no}
-    enable_xactengine3_0=${enable_xactengine3_0:-no}
-    enable_xactengine3_1=${enable_xactengine3_1:-no}
-    enable_xactengine3_2=${enable_xactengine3_2:-no}
-    enable_xactengine3_3=${enable_xactengine3_3:-no}
-    enable_xactengine3_4=${enable_xactengine3_4:-no}
-    enable_xactengine3_5=${enable_xactengine3_5:-no}
-    enable_xactengine3_6=${enable_xactengine3_6:-no}
-    enable_xactengine3_7=${enable_xactengine3_7:-no}
     enable_xapofx1_1=${enable_xapofx1_1:-no}
     enable_xapofx1_2=${enable_xapofx1_2:-no}
     enable_xapofx1_3=${enable_xapofx1_3:-no}
@@ -20155,14 +20140,6 @@ wine_fn_config_makefile dlls/x3daudio1_4 enable_x3daudio1_4
 wine_fn_config_makefile dlls/x3daudio1_5 enable_x3daudio1_5
 wine_fn_config_makefile dlls/x3daudio1_6 enable_x3daudio1_6
 wine_fn_config_makefile dlls/x3daudio1_7 enable_x3daudio1_7
-wine_fn_config_makefile dlls/xactengine3_0 enable_xactengine3_0
-wine_fn_config_makefile dlls/xactengine3_1 enable_xactengine3_1
-wine_fn_config_makefile dlls/xactengine3_2 enable_xactengine3_2
-wine_fn_config_makefile dlls/xactengine3_3 enable_xactengine3_3
-wine_fn_config_makefile dlls/xactengine3_4 enable_xactengine3_4
-wine_fn_config_makefile dlls/xactengine3_5 enable_xactengine3_5
-wine_fn_config_makefile dlls/xactengine3_6 enable_xactengine3_6
-wine_fn_config_makefile dlls/xactengine3_7 enable_xactengine3_7
 wine_fn_config_makefile dlls/xapofx1_1 enable_xapofx1_1
 wine_fn_config_makefile dlls/xapofx1_2 enable_xapofx1_2
 wine_fn_config_makefile dlls/xapofx1_3 enable_xapofx1_3
